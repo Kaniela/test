@@ -1,0 +1,187 @@
+description: Heat Template for Standard Reverse Engineering - disassembly - patching - debugging.
+heat_template_version: '2017-02-24'
+outputs:
+  floating_ip:
+    description: Windows 10 floating IP for RDP access
+    value:
+      get_attr: [float_ip, floating_ip_address]
+      
+parameters:
+
+  last_name:
+    type: string
+    label: Last Name
+    description: Last Name
+    default:
+    constraints:
+    - length: { max: 15, min: 1 }
+      description: Last name must be no longer than 15 characters
+    - allowed_pattern: "[a-zA-Z]*"
+      description: Last name may only contain letters
+
+  password:
+    type: string
+    label: Password
+    description: Set root/admin password for instances
+    hidden: true
+    default:
+    constraints:
+      -  length: { min: 8, max: 20 }
+         description: Password must be between 8 and 20 characters
+      -  allowed_pattern: "[a-zA-Z0-9]*"
+         description: Password may not contain special characters
+    
+  student_id:
+    type: string
+    label: Student ID
+    description: Student ID Number with No Leading Zeros
+
+resources:
+
+  stu-network:
+    type: OS::Neutron::Net
+    properties:
+      name:
+        str_replace:
+          template: lastName_Network
+          params:
+            lastName: { get_param: last_name }
+      admin_state_up: true
+      shared: false
+
+  
+  stu-subnet:
+    type: OS::Neutron::Subnet
+    properties:
+      allocation_pools:
+        - start:
+            str_replace:
+              template: 10.studentID.0.200
+              params:
+                studentID: { get_param: student_id }
+          end:
+            str_replace:
+              template: 10.studentID.0.250
+              params:
+                studentID: { get_param: student_id }
+      cidr:
+        str_replace:
+          template: 10.studentID.0.0/24
+          params:
+            studentID: { get_param: student_id }
+      gateway_ip:
+        str_replace:
+          template: 10.studentID.0.254
+          params:
+            studentID: { get_param: student_id }
+      network_id: { get_resource: stu-network }
+      dns_nameservers: [10.50.255.254]
+      enable_dhcp: true
+      host_routes: []
+      ip_version: 4
+      name:
+        str_replace:
+          template: lastname_subnet
+          params:
+            lastname: { get_param: last_name }
+
+  external_router:
+    type: OS::Neutron::Router
+    properties:
+      name:
+        str_replace:
+          template: lastname_router
+          params:
+            lastname: { get_param: last_name }
+      external_gateway_info: { "network": public }
+
+  external_router_interface_0:
+    type: OS::Neutron::RouterInterface
+    properties:
+      router_id: { get_resource: external_router }
+      subnet_id: { get_resource: stu-network }
+
+  float_ip:
+    type: OS::Neutron::FloatingIP
+    depends_on: external_router
+    properties: { floating_network: public }
+  
+  float_ip_assoc:
+    type: OS::Neutron::FloatingIPAssociation
+    properties:
+      floatingip_id: { get_resource: float_ip }
+      port_id: { get_resource: float_port }
+  
+  float_port:
+    type: OS::Neutron::Port
+    depends_on: secgroup0
+    properties:
+      fixed_ips:
+      - ip_address:
+          str_replace:
+            params:
+              studentID: { get_param: student_id }
+            template: 10.studentID.0.1
+      network_id: { get_resource: stu-network }
+      
+      security_groups:
+      - { get_resource: secgroup0 }
+    
+  secgroup0:
+    type: OS::Neutron::SecurityGroup
+    properties:
+      description: Enable RDP and ICMP
+      name: RDP/ICMP Enable
+      rules:
+      - { port_range_max: 3389, port_range_min: 3389, protocol: TCP }
+      - { protocol: ICMP }
+      - { port_range_max: 22, port_range_min: 22, protocol: TCP }
+    
+    
+  server_1:
+    type: OS::Nova::Server
+    properties:
+      name:
+        str_replace:
+          template: lastname-Windows-10-RE
+          params:
+            lastname: { get_param: last_name }
+      image: Windows 10
+      flavor: cy.mega
+      diskConfig: AUTO
+      networks:
+      - port: { get_resource: float_port }
+      user_data:
+        str_replace:
+          template: |
+            #ps1_sysnative
+            $ErrorActionPreference = 'SilentlyContinue'
+            netsh advfirewall set allprofiles state off
+
+            set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\TerminalServer' -name "fDenyTSConnections" -Value 0
+            set-ItemProperty -Path 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Policies\System' -name "dontdisplaylastusername" -Value 1
+
+            (new-object System.Net.WebClient).DownloadFile('https://download.mozilla.org/?product=firefox-48.0.2-SSL&os=win64&lang=en-US','C:\firefox.exe')
+            & c:\firefox.exe -ms
+
+            (new-object System.Net.WebClient).DownloadFile('https://www.python.org/ftp/python/2.7.15/python-2.7.15.msi','C:\python-2.7.15.msi')
+            & msiexec /i c:\python-2.7.15.msi /passive /norestart ADDLOCAL=ALL
+
+            (new-object System.Net.WebClient).DownloadFile('https://out7.hex-rays.com/files/idafree70_windows.exe','C:\idafree70_windows.exe')
+            & c:\idafree70_windows.exe /VERYSILENT
+
+            (new-object System.Net.WebClient).DownloadFile('https://notepad-plus-plus.org/repository/6.x/6.9.2/npp.6.9.2.Installer.exe','C:\npp.exe')
+            & c:\npp.exe /S
+
+            net user /add $user $password /y
+            net localgroup administrators /add $user
+
+            exit 1001
+            shutdown -r -f
+        
+        params:
+            $user: { get_param: last_name }
+            $password: { get_param: password }
+            $studentID: { get_param: student_id }
+
+      user_data_format: RAW
